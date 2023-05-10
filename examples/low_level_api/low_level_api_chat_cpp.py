@@ -16,8 +16,8 @@ from time import time
 from os import cpu_count, path
 
 import llama_cpp
-from common import GptParams, gpt_params_parse, gpt_random_prompt
-import util
+from llama_cpp_python.examples.low_level_api.common import GptParams, gpt_params_parse, gpt_random_prompt
+import llama_cpp_python.examples.low_level_api.util as util
 
 # A LLaMA interactive session
 class LLaMAInteract:
@@ -368,10 +368,10 @@ n_keep = {self.params.n_keep}
 						id = llama_cpp.llama_sample_token_mirostat_v2(self.ctx, candidates_p, llama_cpp.c_float(self.params.mirostat_tau), llama_cpp.c_float(self.params.mirostat_eta), llama_cpp.c_float(mirostat_mu))
 					else:
 						# Temperature sampling
-						llama_cpp.llama_sample_top_k(self.ctx, candidates_p, top_k)
-						llama_cpp.llama_sample_tail_free(self.ctx, candidates_p, llama_cpp.c_float(self.params.tfs_z))
-						llama_cpp.llama_sample_typical(self.ctx, candidates_p, llama_cpp.c_float(self.params.typical_p))
-						llama_cpp.llama_sample_top_p(self.ctx, candidates_p, llama_cpp.c_float(self.params.top_p))
+						llama_cpp.llama_sample_top_k(self.ctx, candidates_p, top_k, 1)
+						llama_cpp.llama_sample_tail_free(self.ctx, candidates_p, llama_cpp.c_float(self.params.tfs_z), 1)
+						llama_cpp.llama_sample_typical(self.ctx, candidates_p, llama_cpp.c_float(self.params.typical_p), 1)
+						llama_cpp.llama_sample_top_p(self.ctx, candidates_p, llama_cpp.c_float(self.params.top_p), 1)
 						llama_cpp.llama_sample_temperature(self.ctx, candidates_p, llama_cpp.c_float(self.params.temp))
 						id = llama_cpp.llama_sample_token(self.ctx, candidates_p)
 				# print("`{}`".format(candidates_p.size))
@@ -444,7 +444,7 @@ n_keep = {self.params.n_keep}
 			if (self.params.interactive and self.remaining_tokens <= 0 and self.params.n_predict != -1):
 				# If we arent in instruction mode, fix the current generation by appending the antiprompt.
 				# Makes it so if chat ends prematurely you dont append the AI's text etc.
-				if not self.params.instruct:
+				if not self.params.instruct and self.first_antiprompt:
 					self.embd_inp += self.first_antiprompt[0]
 				self.n_remain = self.params.n_predict
 				break
@@ -480,6 +480,10 @@ n_keep = {self.params.n_keep}
 		for id in self.generate():
 			cur_char = llama_cpp.llama_token_to_str(self.ctx, id)
 
+			# Stop the inference after a new line character
+			if cur_char == b"\n":
+				break
+
 			# Add remainder of missing bytes
 			if None in self.multibyte_fix:
 				self.multibyte_fix[self.multibyte_fix.index(None)] = cur_char
@@ -493,7 +497,7 @@ n_keep = {self.params.n_keep}
 			# Contains multi-byte UTF8
 			for num, pattern in [(2, 192), (3, 224), (4, 240)]:
 				# Bitwise AND check
-				if pattern & int.from_bytes(cur_char) == pattern:
+				if pattern & int.from_bytes(cur_char, byteorder='big') == pattern:
 					self.multibyte_fix = [cur_char] + ([None] * (num-1))
 
 			# Stop incomplete bytes from passing
@@ -518,7 +522,7 @@ n_keep = {self.params.n_keep}
 		while self.params.interactive:
 			self.set_color(util.CONSOLE_COLOR_USER_INPUT)
 			if (self.params.instruct):
-				print('\n> ', end="")
+				print('\n$ ', end="")
 				self.input(self.read_input())
 			else:
 				print(self.params.input_prefix, end="")
