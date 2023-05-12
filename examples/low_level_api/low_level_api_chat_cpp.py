@@ -477,17 +477,8 @@ n_keep = {self.params.n_keep}
 	# write output
 	def output(self):
 		self.remaining_tokens = self.params.n_predict
-		flag = False
 		for id in self.generate():
 			cur_char = llama_cpp.llama_token_to_str(self.ctx, id)
-
-			# Stop the inference after 2 consecutive new line characters
-			if cur_char == b"\n":
-				if flag:
-					break
-				flag = True
-			else:
-				flag = False
 
 			# Add remainder of missing bytes
 			if None in self.multibyte_fix:
