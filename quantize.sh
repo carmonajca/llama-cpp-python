@@ -1,12 +1,18 @@
 #!/bin/bash
 
-MAIN_DIR="/mnt/data/LLM_models/llama-cpp/"
+if [ $# -eq 0 ]; then
+    echo "Please, provide the main path to the folder where the models (ckpt_dirs) are."
+    exit 1
+fi
+MAIN_DIR="$1"
 
 SCRIPT_DIR=$(dirname "$0")
 
 cd "${SCRIPT_DIR}/vendor/llama.cpp"
 echo $(pwd)
-make quantize
+if [ ! -f "quantize" ]; then
+    make quantize
+fi
 for dir in $(find $MAIN_DIR/* -type d); do
     echo $dir
     if [ -f "${dir}/ggml-model-f16.bin" ]; then
