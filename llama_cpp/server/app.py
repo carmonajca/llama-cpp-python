@@ -16,7 +16,16 @@ class Settings(BaseSettings):
     model: str = Field(
         description="The path to the model to use for generating completions."
     )
+    model_alias: Optional[str] = Field(
+        default=None,
+        description="The alias of the model to use for generating completions.",
+    )
     n_ctx: int = Field(default=2048, ge=1, description="The context size.")
+    n_gpu_layers: int = Field(
+        default=0,
+        ge=0,
+        description="The number of layers to put on the GPU. The rest will be on the CPU.",
+    )
     n_batch: int = Field(
         default=512, ge=1, description="The batch size to use per eval."
     )
@@ -59,6 +68,7 @@ class Settings(BaseSettings):
 
 router = APIRouter()
 
+settings: Optional[Settings] = None
 llama: Optional[llama_cpp.Llama] = None
 
 
@@ -80,6 +90,7 @@ def create_app(settings: Optional[Settings] = None):
     global llama
     llama = llama_cpp.Llama(
         model_path=settings.model,
+        n_gpu_layers=settings.n_gpu_layers,
         f16_kv=settings.f16_kv,
         use_mlock=settings.use_mlock,
         use_mmap=settings.use_mmap,
@@ -95,6 +106,12 @@ def create_app(settings: Optional[Settings] = None):
     if settings.cache:
         cache = llama_cpp.LlamaCache(capacity_bytes=settings.cache_size)
         llama.set_cache(cache)
+
+    def set_settings(_settings: Settings):
+        global settings
+        settings = _settings
+
+    set_settings(settings)
     return app
 
 
@@ -104,6 +121,10 @@ llama_lock = Lock()
 def get_llama():
     with llama_lock:
         yield llama
+
+
+def get_settings():
+    yield settings
 
 
 model_field = Field(description="The model to use for generating completions.")
@@ -166,8 +187,9 @@ frequency_penalty_field = Field(
     description="Positive values penalize new tokens based on their existing frequency in the text so far, decreasing the model's likelihood to repeat the same line verbatim.",
 )
 
+
 class CreateCompletionRequest(BaseModel):
-    prompt: Optional[str] = Field(
+    prompt: Union[str, List[str]] = Field(
         default="", description="The prompt to generate completions for."
     )
     suffix: Optional[str] = Field(
@@ -222,10 +244,13 @@ CreateCompletionResponse = create_model_from_typeddict(llama_cpp.Completion)
 def create_completion(
     request: CreateCompletionRequest, llama: llama_cpp.Llama = Depends(get_llama)
 ):
+    if isinstance(request.prompt, list):
+        assert len(request.prompt) <= 1
+        request.prompt = request.prompt[0] if len(request.prompt) > 0 else ""
+
     completion_or_chunks = llama(
         **request.dict(
             exclude={
-                "model",
                 "n",
                 "best_of",
                 "logit_bias",
@@ -263,7 +288,7 @@ CreateEmbeddingResponse = create_model_from_typeddict(llama_cpp.Embedding)
 def create_embedding(
     request: CreateEmbeddingRequest, llama: llama_cpp.Llama = Depends(get_llama)
 ):
-    return llama.create_embedding(**request.dict(exclude={"model", "user"}))
+    return llama.create_embedding(**request.dict(exclude={"user"}))
 
 
 class ChatCompletionRequestMessage(BaseModel):
@@ -324,7 +349,6 @@ def create_chat_completion(
     completion_or_chunks = llama.create_chat_completion(
         **request.dict(
             exclude={
-                "model",
                 "n",
                 "logit_bias",
                 "user",
@@ -367,13 +391,16 @@ GetModelResponse = create_model_from_typeddict(ModelList)
 
 @router.get("/v1/models", response_model=GetModelResponse)
 def get_models(
+    settings: Settings = Depends(get_settings),
     llama: llama_cpp.Llama = Depends(get_llama),
 ) -> ModelList:
     return {
         "object": "list",
         "data": [
             {
-                "id": llama.model_path,
+                "id": settings.model_alias
+                if settings.model_alias is not None
+                else llama.model_path,
                 "object": "model",
                 "owned_by": "me",
                 "permissions": [],

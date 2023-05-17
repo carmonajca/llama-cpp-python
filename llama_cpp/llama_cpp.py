@@ -44,15 +44,20 @@ def _load_shared_library(lib_base_name: str):
         _base_path = _lib.parent.resolve()
         _lib_paths = [_lib.resolve()]
 
+    cdll_args = dict() # type: ignore
     # Add the library directory to the DLL search path on Windows (if needed)
     if sys.platform == "win32" and sys.version_info >= (3, 8):
         os.add_dll_directory(str(_base_path))
+        if "CUDA_PATH" in os.environ:
+            os.add_dll_directory(os.path.join(os.environ["CUDA_PATH"],"bin"))
+            os.add_dll_directory(os.path.join(os.environ["CUDA_PATH"],"lib"))
+        cdll_args["winmode"] = 0
 
     # Try to load the shared library, handling potential errors
     for _lib_path in _lib_paths:
         if _lib_path.exists():
             try:
-                return ctypes.CDLL(str(_lib_path))
+                return ctypes.CDLL(str(_lib_path), **cdll_args)
             except Exception as e:
                 raise RuntimeError(f"Failed to load shared library '{_lib_path}': {e}")
 
@@ -68,7 +73,7 @@ _lib_base_name = "llama"
 _lib = _load_shared_library(_lib_base_name)
 
 # C types
-LLAMA_FILE_VERSION = c_int(1)
+LLAMA_FILE_VERSION = c_int(2)
 LLAMA_FILE_MAGIC = b"ggjt"
 LLAMA_FILE_MAGIC_UNVERSIONED = b"ggml"
 LLAMA_SESSION_MAGIC = b"ggsn"
@@ -109,6 +114,7 @@ class llama_context_params(Structure):
     _fields_ = [
         ("n_ctx", c_int),  # text context
         ("n_parts", c_int),  # -1 for default
+        ("n_gpu_layers", c_int),  # number of layers to store in VRAM
         ("seed", c_int),  # RNG seed, 0 for random
         ("f16_kv", c_bool),  # use fp16 for KV cache
         (
@@ -135,7 +141,7 @@ LLAMA_FTYPE_MOSTLY_Q4_1 = c_int(3)  # except 1d tensors
 LLAMA_FTYPE_MOSTLY_Q4_1_SOME_F16 = c_int(
     4
 )  # tok_embeddings.weight and output.weight are F16
-LLAMA_FTYPE_MOSTLY_Q4_2 = c_int(5)  # except 1d tensors
+# LLAMA_FTYPE_MOSTLY_Q4_2 = c_int(5)  # except 1d tensors
 # LLAMA_FTYPE_MOSTYL_Q4_3 = c_int(6)  # except 1d tensors
 LLAMA_FTYPE_MOSTLY_Q8_0 = c_int(7)  # except 1d tensors
 LLAMA_FTYPE_MOSTLY_Q5_0 = c_int(8)  # except 1d tensors
@@ -259,9 +265,9 @@ _lib.llama_get_state_size.restype = c_size_t
 # Destination needs to have allocated enough memory.
 # Returns the number of bytes copied
 def llama_copy_state_data(
-    ctx: llama_context_p, dest  # type: Array[c_uint8]
+    ctx: llama_context_p, dst  # type: Array[c_uint8]
 ) -> int:
-    return _lib.llama_copy_state_data(ctx, dest)
+    return _lib.llama_copy_state_data(ctx, dst)
 
 
 _lib.llama_copy_state_data.argtypes = [llama_context_p, c_uint8_p]
@@ -350,7 +356,7 @@ def llama_tokenize(
     tokens,  # type: Array[llama_token]
     n_max_tokens: c_int,
     add_bos: c_bool,
-) -> c_int:
+) -> int:
     return _lib.llama_tokenize(ctx, text, tokens, n_max_tokens, add_bos)
 
 
